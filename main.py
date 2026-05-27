@@ -8,6 +8,7 @@ from utils import (
     pergunta_quer_dados,
     resposta_parece_alucinacao,
     historico_sanitizado,
+    pergunta_e_saudacao,
 )
 from tools import (
     consultar_cobertura_cidade,
@@ -22,7 +23,7 @@ from tools import (
 )
 
 # ── Configuração ─────────────────────────────────────────────────────────────
-MODEL = "qwen2.5:1.5b"
+MODEL = "qwen2.5:3b"
 DEBUG = True
 MAX_RETRIES = 2
 # ─────────────────────────────────────────────────────────────────────────────
@@ -85,7 +86,10 @@ def executar_tool(tool: str, parametro: str):
     if func is None:
         return None, f"Ferramenta '{tool}' não reconhecida."
     try:
+        if parametro == "none":
+            parametro = ""
         resultado = func(parametro) if parametro else func()
+
         return resultado, None
     except Exception as e:
         return None, f"Erro ao executar '{tool}': {e}"
@@ -98,7 +102,10 @@ def montar_resposta(tool: str, parametro: str, resultado) -> str:
     else:
         resultado_str = str(resultado)
 
-    param_label = parametro.title() if parametro else ""
+    param_label = parametro
+
+    if param_label:
+        param_label = param_label.title()
 
     templates = {
         "consultar_cobertura_cidade": f"A cobertura vacinal de {param_label} é {resultado_str}.",
@@ -115,17 +122,44 @@ def montar_resposta(tool: str, parametro: str, resultado) -> str:
 
 
 def chat_com_modelo(historico: list[dict]) -> str:
-    resposta = ollama.chat(model=MODEL, messages=historico)
-    return resposta["message"]["content"]
+
+    resposta = ollama.chat(
+
+        model=MODEL,
+
+        messages=historico,
+
+        options={
+
+            "temperature": 0,
+
+            "top_p": 0.1,
+
+            "num_predict": 120,
+        }
+    )
+
+    return resposta["message"]["content"].strip()
 
 
-def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, bool]:
+def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, bool, bool]:
     """
     Retorna: (resposta_final, resposta_raw, deve_salvar_no_historico)
 
     O terceiro valor indica se a resposta deve entrar no histórico.
     Respostas de fora do tema NÃO entram — evita contaminar o contexto do modelo.
     """
+
+    # ── Saudação ─────────────────────────────────────
+
+    if pergunta_e_saudacao(pergunta):
+
+        return (
+            "Olá! Posso ajudar com informações sobre vacinação, postos de saúde e vacinas.",
+            "[saudacao]",
+            False,
+            False,
+        )
 
     # ── Passo 1: filtro de tema ───────────────────────────────────────────────
     # Follow-ups curtos ("e do rio?", "e para idosos?") passam se o usuário
@@ -138,7 +172,7 @@ def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, boo
         if DEBUG:
             print(f"\n[FILTRO] Fora do tema — bloqueada por Python.")
         # False = não salvar no histórico (pergunta e resposta descartadas)
-        return MSG_FORA_TEMA, "[bloqueado por filtro de tema]", False
+        return MSG_FORA_TEMA, "[bloqueado por filtro de tema]", False, False
 
     # ── Passo 2: consulta ao modelo ───────────────────────────────────────────
     historico_limpo = historico_sanitizado(historico)
@@ -149,18 +183,21 @@ def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, boo
 
     parsed = parse_resposta_modelo(resposta_raw)
 
+    if DEBUG:
+        print(f"[PARSED]: {parsed}")
+
     if parsed["tipo"] == "tool":
         resultado, erro = executar_tool(parsed["tool"], parsed["parametro"])
         if erro:
             return erro, resposta_raw, True
-        return montar_resposta(parsed["tool"], parsed["parametro"], resultado), resposta_raw, True
+        return montar_resposta(parsed["tool"], parsed["parametro"], resultado), resposta_raw, True, False
 
     # ── Passo 3: modelo respondeu livre — verificar se deveria chamar tool ────
     texto_livre = parsed["texto"]
     deveria_chamar_tool = pergunta_quer_dados(pergunta) or resposta_parece_alucinacao(texto_livre)
 
     if not deveria_chamar_tool:
-        return texto_livre, resposta_raw, True
+        return texto_livre, resposta_raw, True, False
 
     # ── Passo 4: retry ────────────────────────────────────────────────────────
     for tentativa in range(1, MAX_RETRIES + 1):
@@ -229,7 +266,7 @@ def main():
         historico.append({"role": "user", "content": pergunta})
 
         try:
-            resposta_final, resposta_raw, salvar = processar_turno(pergunta, historico)
+            resposta_final, resposta_raw, salvar, fora_tema = processar_turno(pergunta, historico)
         except Exception as e:
             print(f"\n[ERRO ao conectar ao Ollama: {e}]")
             print("Verifique se o Ollama está rodando: ollama serve\n")
@@ -243,11 +280,14 @@ def main():
             # Turno sobre vacinação: salva resposta no histórico normalmente
             historico.append({"role": "assistant", "content": resposta_final})
         else:
-            # Turno fora do tema: descarta pergunta E resposta do histórico
-            # O modelo nunca saberá que essa troca aconteceu
+
             historico.pop()
-            if DEBUG:
-                print(f"[DEBUG] Turno fora do tema descartado do histórico.\n")
+
+            if DEBUG and fora_tema:
+
+                print(
+                    "[DEBUG] Turno fora do tema descartado do histórico.\n"
+                )
 
 
 if __name__ == "__main__":

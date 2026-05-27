@@ -66,6 +66,34 @@ CONTEXTO — use mensagens anteriores
 "e de santos?" após falar de cobertura de cidade → CALL_TOOL:consultar_cobertura_cidade:Santos
 "e para adultos?" após falar de grupos → CALL_TOOL:vacinas_por_grupo:adultos
 "e a do rio?" após falar de cobertura de estado → CALL_TOOL:consultar_cobertura_estado:Rio de Janeiro
+
+━━━━━━━━━━━━━━━━━━
+NÃO USE TOOL PARA
+━━━━━━━━━━━━━━━━━━
+
+NÃO use ferramentas para:
+- dúvidas gerais
+- orientações simples
+- sintomas
+- recomendações médicas básicas
+- perguntas conceituais
+
+Nesses casos, responda com uma frase curta.
+
+Exemplos:
+
+Usuário: posso tomar vacina com febre?
+Resposta: Pessoas com febre devem procurar orientação médica antes de se vacinar.
+
+Usuário: vacina dói?
+Resposta: Algumas vacinas podem causar dor leve no local da aplicação.
+
+Usuário: o que fazer após vacina?
+Resposta: É recomendado repouso e hidratação caso ocorram sintomas leves.
+
+Usuário: estou gripado posso vacinar?
+Resposta: Pessoas gripadas devem buscar orientação médica antes da vacinação.
+
 """
 
 # Prompt usado no retry quando o modelo não chamou CALL_TOOL mas deveria

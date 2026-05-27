@@ -37,6 +37,29 @@ def parse_resposta_modelo(resposta: str) -> dict:
 
     return {"tipo": "texto", "texto": raw, "raw": raw}
 
+# ── Saudações ───────────────────────────────────────────────────────────────
+
+_SAUDACOES = [
+
+    "oi",
+    "ola",
+    "olá",
+    "opa",
+    "eae",
+    "eae",
+    "bom dia",
+    "boa tarde",
+    "boa noite",
+    "salve",
+    "hello",
+    "hi",
+]
+
+def pergunta_e_saudacao(pergunta: str) -> bool:
+
+    pergunta = normalizar(pergunta)
+
+    return pergunta in _SAUDACOES
 
 # ── Filtro de tema ────────────────────────────────────────────────────────────
 # Palavras que indicam que a pergunta É sobre vacinação/saúde pública.
@@ -106,37 +129,36 @@ def pergunta_e_sobre_vacina(pergunta: str) -> bool:
 # ── Gatilhos de dados ─────────────────────────────────────────────────────────
 # Se a pergunta bater aqui e o modelo não chamar CALL_TOOL → retry
 _GATILHOS_DADOS = [
+
+    # cobertura
     r"\bcobertura\b",
     r"\bpercentual\b",
     r"\branking\b",
     r"\bpior\b",
     r"\bmelhor\b",
+
+    # vacinas por idade/grupo
     r"\bvacinas?\s+(para|de|por|recomendadas?)\b",
     r"\brecomendadas?\s+para\b",
     r"\bquais\s+vacinas?\b",
-    r"\befeitos?\s+colaterais?\b",
+
+    # efeitos ESPECÍFICOS
+    r"\befeitos?\s+colaterais?\s+da\b",
+    r"\breacoes?\s+da\s+vacina\b",
+
+    # posto
     r"\bendereco\b",
     r"\bposto\b",
     r"\bhorario\b",
+
+    # idade/grupo
     r"\bidade\b",
     r"\banos?\b",
-    r"\bidoso\b",
-    r"\bgestante\b",
-    r"\bcrianca\b",
-    r"\badolescente\b",
-    r"\badulto\b",
-    r"\bgripe\b",
-    r"\binfluenza\b",
-    r"\bcovid\b",
-    r"\bhpv\b",
-    r"\bbcg\b",
-    r"\bhepatite\b",
-    r"\bfebre amarela\b",
-    r"\bpolio\b",
-    r"\bpneumo\b",
-    r"\btetano\b",
-    r"\bsarampo\b",
-    r"\bdtpa?\b",
+    r"\bidosos?\b",
+    r"\bgestantes?\b",
+    r"\bcriancas?\b",
+    r"\badolescentes?\b",
+    r"\badultos?\b",
 ]
 
 _PATTERN_DADOS = re.compile("|".join(_GATILHOS_DADOS), re.IGNORECASE)
@@ -158,7 +180,7 @@ def resposta_parece_alucinacao(texto: str) -> bool:
         r"triplice viral|febre amarela|pneumococica|meningococica|varicela|rotavirus)\b",
         texto, re.IGNORECASE
     )
-    if len(set(v.lower() for v in vacinas_encontradas)) >= 3:
+    if len(set(v.lower() for v in vacinas_encontradas)) >= 5:
         return True
     return False
 
