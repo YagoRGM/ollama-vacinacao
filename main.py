@@ -1,318 +1,392 @@
-#main.py
+# main.py
+
+# =========================
+# BIBLIOTECAS
+# =========================
+
+import re
 import ollama
 
-from prompts import SYSTEM_PROMPT, RETRY_PROMPT
-from utils import (
-    parse_resposta_modelo,
-    log_modelo,
-    pergunta_e_sobre_vacina,
-    pergunta_quer_dados,
-    resposta_parece_alucinacao,
-    historico_sanitizado,
-    pergunta_e_saudacao,
-    extrair_idade,
+from prompts import (
+    SYSTEM_PROMPT,
+    PROMPT_CLASSIFICADOR
 )
-from tools import (
-    consultar_cobertura_cidade,
-    consultar_cobertura_estado,
-    consultar_cobertura_vacina,
+
+from cobertura import (
+    buscar_cobertura_estado,
+    buscar_cobertura_municipio,
+    detectar_municipio,
+    obter_estado_do_municipio,
     ranking_estados,
-    vacinas_por_idade,
-    vacinas_por_grupo,
-    horario_posto,
-    endereco_posto,
-    efeitos_colaterais,
+    carregar_dados
 )
 
-# ── Configuração ─────────────────────────────────────────────────────────────
-MODEL = "qwen2.5:3b"
-DEBUG = True
-MAX_RETRIES = 2
-# ─────────────────────────────────────────────────────────────────────────────
+# =========================
+# CONFIGURAÇÕES
+# =========================
 
-ROUTER = {
-    "consultar_cobertura_cidade": consultar_cobertura_cidade,
-    "consultar_cobertura_estado": consultar_cobertura_estado,
-    "consultar_cobertura_vacina": consultar_cobertura_vacina,
-    "ranking_estados":            ranking_estados,
-    "vacinas_por_idade":          vacinas_por_idade,
-    "vacinas_por_grupo":          vacinas_por_grupo,
-    "horario_posto":              horario_posto,
-    "endereco_posto":             endereco_posto,
-    "efeitos_colaterais":         efeitos_colaterais,
-}
+HISTORICO = []
 
-MSG_FORA_TEMA = (
-    "Sou especializado em vacinação pública brasileira e não posso ajudar com outros assuntos. "
-    "Posso informar sobre coberturas vacinais, vacinas por idade ou grupo, postos de saúde e muito mais!"
-)
-MSG_SEM_DADOS = (
-    "Não consegui localizar essa informação. "
-    "Tente perguntar sobre uma cidade, estado ou vacina específica."
-)
-
-# Palavras que indicam follow-up de vacinação em perguntas do USUÁRIO
-# Ex: "e do rio?" após cobertura, "e para idosos?" após grupo
-# Só lemos mensagens do usuário, nunca do assistente, para evitar contaminação
-_FOLLOWUP_VACINA = [
-    "cobertura", "vacina", "imuniza", "posto", "ubs", "efeito",
-    "colateral", "dose", "grupo", "idade", "ranking", "estado",
-    "cidade", "gripe", "covid", "hpv", "bcg", "hepatite", "influenza",
-    "gestante", "idoso", "crianca", "adolescente", "adulto",
+ESTADOS = [
+    "AC", "AL", "AP", "AM", "BA",
+    "CE", "DF", "ES", "GO", "MA",
+    "MT", "MS", "MG", "PA", "PB",
+    "PR", "PE", "PI", "RJ", "RN",
+    "RS", "RO", "RR", "SC", "SP",
+    "SE", "TO"
 ]
 
+# =========================
+# INICIALIZAÇÃO
+# =========================
 
-def _tem_contexto_vacina_no_historico(historico: list[dict], janela: int = 4) -> bool:
-    """
-    Verifica se alguma das últimas `janela` mensagens DO USUÁRIO
-    continha palavras de vacinação. Isso indica que uma pergunta curta
-    como 'e do rio?' é um follow-up legítimo.
+print("=" * 40)
+print("🤖 ASSISTENTE GOTINHA MINI")
+print("=" * 40)
 
-    IMPORTANTE: lemos só role=user — nunca role=assistant.
-    A MSG_FORA_TEMA do assistente contém palavras como "coberturas vacinais"
-    e "postos de saúde", o que contaminava o filtro de contexto.
-    """
-    msgs_usuario = [
-        m for m in historico if m["role"] == "user"
-    ][-janela:]
+print("Carregando dados...")
+carregar_dados()
+print("Dados carregados.")
+print("=" * 40)
 
-    for msg in msgs_usuario:
-        texto = msg["content"].lower()
-        if any(kw in texto for kw in _FOLLOWUP_VACINA):
-            return True
-    return False
+# =========================
+# HISTÓRICO
+# =========================
 
+def adicionar_historico(role, content):
 
-def executar_tool(tool: str, parametro: str):
-    func = ROUTER.get(tool)
-    if func is None:
-        return None, f"Ferramenta '{tool}' não reconhecida."
-    try:
-        if parametro == "none":
-            parametro = ""
-        resultado = func(parametro) if parametro else func()
+    HISTORICO.append({
+        "role": role,
+        "content": content
+    })
 
-        return resultado, None
-    except Exception as e:
-        return None, f"Erro ao executar '{tool}': {e}"
+    # mantém pequeno
+    if len(HISTORICO) > 10:
+        HISTORICO.pop(0)
 
+# =========================
+# DETECTAR ESTADO
+# =========================
 
-def montar_resposta(tool: str, parametro: str, resultado) -> str:
-    if isinstance(resultado, list):
-        itens = "\n".join(f"  • {item}" for item in resultado)
-        resultado_str = f"\n{itens}"
-    else:
-        resultado_str = str(resultado)
+def detectar_estado(texto):
 
-    param_label = parametro
+    texto = texto.upper()
 
-    if param_label:
-        param_label = param_label.title()
-
-    templates = {
-        "consultar_cobertura_cidade": f"A cobertura vacinal de {param_label} é {resultado_str}.",
-        "consultar_cobertura_estado": f"A cobertura vacinal do estado {param_label} é {resultado_str}.",
-        "consultar_cobertura_vacina": f"A cobertura da vacina {param_label} é {resultado_str}.",
-        "ranking_estados":            f"Ranking de cobertura vacinal por estado:\n{resultado_str}",
-        "vacinas_por_idade":          f"Vacinas recomendadas para {parametro} anos:{resultado_str}",
-        "vacinas_por_grupo":          f"Vacinas recomendadas para {parametro.lower() if parametro else ''}:{resultado_str}",
-        "horario_posto":              resultado_str,
-        "endereco_posto":             f"Informações do posto em {param_label}:\n  {resultado_str}",
-        "efeitos_colaterais":         f"Efeitos colaterais comuns da vacina {param_label}:{resultado_str}",
+    estados = {
+        "AC": ["AC", "ACRE"],
+        "AL": ["AL", "ALAGOAS"],
+        "AP": ["AP", "AMAPÁ", "AMAPA"],
+        "AM": ["AM", "AMAZONAS"],
+        "BA": ["BA", "BAHIA"],
+        "CE": ["CE", "CEARÁ", "CEARA"],
+        "DF": ["DF", "DISTRITO FEDERAL"],
+        "ES": ["ES", "ESPÍRITO SANTO", "ESPIRITO SANTO"],
+        "GO": ["GO", "GOIÁS", "GOIAS"],
+        "MA": ["MA", "MARANHÃO", "MARANHAO"],
+        "MT": ["MT", "MATO GROSSO"],
+        "MS": ["MS", "MATO GROSSO DO SUL"],
+        "MG": ["MG", "MINAS GERAIS"],
+        "PA": ["PA", "PARÁ", "PARA"],
+        "PB": ["PB", "PARAÍBA", "PARAIBA"],
+        "PR": ["PR", "PARANÁ", "PARANA"],
+        "PE": ["PE", "PERNAMBUCO"],
+        "PI": ["PI", "PIAUÍ", "PIAUI"],
+        "RJ": ["RJ", "RIO DE JANEIRO"],
+        "RN": ["RN", "RIO GRANDE DO NORTE"],
+        "RS": ["RS", "RIO GRANDE DO SUL"],
+        "RO": ["RO", "RONDÔNIA", "RONDONIA"],
+        "RR": ["RR", "RORAIMA"],
+        "SC": ["SC", "SANTA CATARINA"],
+        "SP": ["SP", "SÃO PAULO", "SAO PAULO"],
+        "SE": ["SE", "SERGIPE"],
+        "TO": ["TO", "TOCANTINS"]
     }
-    return templates.get(tool, resultado_str)
 
+    for sigla, nomes in estados.items():
 
-def chat_com_modelo(historico: list[dict]) -> str:
+        for nome in nomes:
+
+            padrao = rf"\b{re.escape(nome)}\b"
+
+            if re.search(padrao, texto):
+                return sigla
+
+    return None
+
+# =========================
+# CLASSIFICADOR OLLAMA
+# =========================
+
+def classificar(pergunta):
 
     resposta = ollama.chat(
-
-        model=MODEL,
-
-        messages=historico,
-
-        options={
-
-            "temperature": 0,
-
-            "top_p": 0.1,
-
-            "num_predict": 120,
-        }
+        model="llama3.2:latest",
+        messages=[
+            {
+                "role": "system",
+                "content": PROMPT_CLASSIFICADOR
+            },
+            {
+                "role": "user",
+                "content": pergunta
+            }
+        ]
     )
 
-    return resposta["message"]["content"].strip()
+    return resposta["message"]["content"].strip().upper()
 
+# =========================
+# RESPOSTA IA
+# =========================
 
-def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, bool, bool]:
-    """
-    Retorna: (resposta_final, resposta_raw, deve_salvar_no_historico)
+def responder_ia(pergunta):
 
-    O terceiro valor indica se a resposta deve entrar no histórico.
-    Respostas de fora do tema NÃO entram — evita contaminar o contexto do modelo.
-    """
+    resposta = ollama.chat(
+        model="llama3.2:latest",
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": pergunta
+            }
+        ]
+    )
 
-    # ── Saudação ─────────────────────────────────────
+    return resposta["message"]["content"]
 
-    if pergunta_e_saudacao(pergunta):
+# =========================
+# LOOP PRINCIPAL
+# =========================
 
-        return (
-            "Olá! Posso ajudar com informações sobre vacinação, postos de saúde e vacinas.",
-            "[saudacao]",
-            False,
-            False,
+while True:
+
+    pergunta = input("\nVocê: ").strip()
+
+    if not pergunta:
+        continue
+
+    pergunta_lower = pergunta.lower()
+
+    adicionar_historico(
+        "user",
+        pergunta
+    )
+
+    # =========================
+    # ENCERRAR
+    # =========================
+
+    if pergunta_lower in [
+        "sair",
+        "exit",
+        "encerrar",
+        "fechar"
+    ]:
+
+        print("\n👋 Encerrando...")
+        break
+
+    # =========================
+    # CLASSIFICAÇÃO
+    # =========================
+
+    try:
+
+        classificacao = classificar(pergunta)
+
+    except Exception as e:
+
+        print(f"\n⚠️ Erro no classificador: {e}")
+        continue
+
+    print(f"[DEBUG]: {classificacao}")
+
+    # =========================
+    # SAUDAÇÃO
+    # =========================
+
+    if classificacao == "SAUDACAO":
+
+        resposta = (
+            "Olá! 👋\n\n"
+            "Sou o Assistente Gotinha 💉\n\n"
+            "Posso ajudar com:\n"
+            "• Cobertura vacinal\n"
+            "• Ranking dos estados\n"
+            "• Vacinas\n"
         )
 
-    # ── Passo 1: filtro de tema ───────────────────────────────────────────────
-    # Follow-ups curtos ("e do rio?", "e para idosos?") passam se o usuário
-    # falou de vacinação nas últimas 4 mensagens.
-    # NUNCA usamos mensagens do assistente para esse check.
-    e_sobre_vacina = pergunta_e_sobre_vacina(pergunta)
-    tem_followup = _tem_contexto_vacina_no_historico(historico)
+        print(f"\nBot:\n{resposta}")
 
-    if not e_sobre_vacina and not tem_followup:
-        if DEBUG:
-            print(f"\n[FILTRO] Fora do tema — bloqueada por Python.")
-        # False = não salvar no histórico (pergunta e resposta descartadas)
-        return MSG_FORA_TEMA, "[bloqueado por filtro de tema]", False, False
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
 
+        continue
 
-    idade_detectada = extrair_idade(pergunta)
+    # =========================
+    # RANKING
+    # =========================
 
-    if idade_detectada is not None:
+    if classificacao == "RANKING":
 
-        if "vacina" in pergunta.lower():
+        print("\n🔎 Calculando ranking...\n")
 
-            resultado = vacinas_por_idade(
-                str(idade_detectada)
+        resposta = ranking_estados()
+
+        print(resposta)
+
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
+
+        continue
+
+    # =========================
+    # MUNICÍPIO
+    # =========================
+
+    if classificacao == "MUNICIPIO":
+
+        municipio = detectar_municipio(
+            pergunta
+        )
+
+        if not municipio:
+
+            print(
+                "\n⚠️ Município não encontrado."
             )
 
-            resposta = montar_resposta(
+            continue
 
-                "vacinas_por_idade",
+        estado = obter_estado_do_municipio(
+            municipio
+        )
 
-                str(idade_detectada),
+        if not estado:
 
-                resultado
+            print(
+                "\n⚠️ Estado não encontrado."
             )
 
-            return resposta, "[idade_detectada]", True, False
-
-    # ── Passo 2: consulta ao modelo ───────────────────────────────────────────
-    historico_limpo = historico_sanitizado(historico)
-    resposta_raw = chat_com_modelo(historico_limpo)
-
-    if DEBUG:
-        print(f"\n[DEBUG modelo raw]: {resposta_raw}")
-
-    parsed = parse_resposta_modelo(resposta_raw)
-
-    if DEBUG:
-        print(f"[PARSED]: {parsed}")
-
-    if parsed["tipo"] == "tool":
-        resultado, erro = executar_tool(parsed["tool"], parsed["parametro"])
-        if erro:
-            return erro, resposta_raw, True
-        return montar_resposta(parsed["tool"], parsed["parametro"], resultado), resposta_raw, True, False
-
-    # ── Passo 3: modelo respondeu livre — verificar se deveria chamar tool ────
-    texto_livre = parsed["texto"]
-    deveria_chamar_tool = pergunta_quer_dados(pergunta) or resposta_parece_alucinacao(texto_livre)
-
-    if not deveria_chamar_tool:
-        return texto_livre, resposta_raw, True, False
-
-    # ── Passo 4: retry ────────────────────────────────────────────────────────
-    for tentativa in range(1, MAX_RETRIES + 1):
-        if DEBUG:
-            print(f"\n[RETRY {tentativa}/{MAX_RETRIES}] Forçando CALL_TOOL...")
-
-        historico_retry = historico_limpo + [
-            {"role": "assistant", "content": texto_livre},
-            {"role": "user", "content": RETRY_PROMPT.format(pergunta=pergunta)},
-        ]
-
-        resposta_raw = chat_com_modelo(historico_retry)
-
-        if DEBUG:
-            print(f"[DEBUG retry raw]: {resposta_raw}")
-
-        parsed_retry = parse_resposta_modelo(resposta_raw)
-
-        if parsed_retry["tipo"] == "tool":
-            resultado, erro = executar_tool(parsed_retry["tool"], parsed_retry["parametro"])
-            if erro:
-                return erro, resposta_raw, True
-            return montar_resposta(parsed_retry["tool"], parsed_retry["parametro"], resultado), resposta_raw, True
-
-        texto_livre = parsed_retry["texto"]
-
-    if DEBUG:
-        print(f"[AVISO] {MAX_RETRIES} retries esgotados.")
-
-    return MSG_SEM_DADOS, resposta_raw, True
-
-
-def main():
-    print(f"\n{'═' * 55}")
-    print(f"  Bot Gotinha — Laboratório de IA")
-    print(f"  Modelo: {MODEL}")
-    print(f"  'limpar' → novo contexto | 'sair' → encerrar")
-    print(f"{'═' * 55}\n")
-
-    historico: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    turno = 0
-
-    while True:
-        try:
-            pergunta = input("Você: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n\nEncerrando. Até logo!")
-            break
-
-        if not pergunta:
             continue
 
-        if pergunta.lower() == "sair":
-            print("\nEncerrando. Até logo!")
-            break
+        print(
+            "\n🔎 Buscando cobertura "
+            "vacinal do município...\n"
+        )
 
-        if pergunta.lower() == "limpar":
-            historico = [{"role": "system", "content": SYSTEM_PROMPT}]
-            turno = 0
-            print("\n[Contexto limpo. Nova conversa iniciada.]\n")
+        resposta = buscar_cobertura_municipio(
+            estado,
+            municipio
+        )
+
+        print(resposta)
+
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
+
+        continue
+
+    # =========================
+    # COBERTURA POR ESTADO
+    # =========================
+
+    if classificacao == "ESTADO_SIGLA":
+
+        estado = detectar_estado(pergunta)
+
+        if not estado:
+
+            print("\n⚠️ Não consegui identificar o estado.")
             continue
 
-        turno += 1
+        print("\n🔎 Buscando cobertura vacinal...\n")
 
-        # Adiciona APENAS a pergunta do usuário por enquanto
-        historico.append({"role": "user", "content": pergunta})
+        resposta = buscar_cobertura_estado(
+            estado
+        )
 
-        try:
-            resposta_final, resposta_raw, salvar, fora_tema = processar_turno(pergunta, historico)
-        except Exception as e:
-            print(f"\n[ERRO ao conectar ao Ollama: {e}]")
-            print("Verifique se o Ollama está rodando: ollama serve\n")
-            historico.pop()
-            continue
+        print(resposta)
 
-        log_modelo(turno, pergunta, resposta_raw, resposta_final)
-        print(f"\nAssistente: {resposta_final}\n")
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
 
-        if salvar:
-            # Turno sobre vacinação: salva resposta no histórico normalmente
-            historico.append({"role": "assistant", "content": resposta_final})
-        else:
+        continue
 
-            historico.pop()
+    # =========================
+    # COBERTURA
+    # =========================
 
-            if DEBUG and fora_tema:
+    if classificacao == "COBERTURA":
 
-                print(
-                    "[DEBUG] Turno fora do tema descartado do histórico.\n"
-                )
+        resposta = (
+            "Digite a sigla do estado.\n\n"
+            "Exemplo:\n"
+            "• cobertura SP\n"
+            "• cobertura RJ"
+        )
 
+        print(f"\nBot:\n{resposta}")
 
-if __name__ == "__main__":
-    main()
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
+
+        continue
+
+    # =========================
+    # FORA DE CONTEXTO
+    # =========================
+
+    if classificacao == "FORA_CONTEXTO":
+
+        resposta = (
+            "Sou o Assistente Gotinha 💉\n\n"
+            "Posso ajudar apenas com:\n"
+            "• vacinação\n"
+            "• cobertura vacinal\n"
+            "• imunização\n"
+            "• SUS"
+        )
+
+        print(f"\nBot:\n{resposta}")
+
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
+
+        continue
+
+    # =========================
+    # FALLBACK IA
+    # =========================
+
+    try:
+
+        resposta = responder_ia(
+            pergunta
+        )
+
+        print(f"\nBot:\n{resposta}")
+
+        adicionar_historico(
+            "assistant",
+            resposta
+        )
+
+    except Exception as e:
+
+        print(f"\n⚠️ Erro: {e}")
