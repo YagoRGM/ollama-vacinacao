@@ -2,6 +2,47 @@
 
 import unicodedata
 import re
+from datetime import datetime
+
+def extrair_idade(pergunta: str):
+
+    pergunta = normalizar(pergunta)
+
+    # idade explícita
+    match_idade = re.search(
+
+        r"(\d{1,3})\s+anos?",
+
+        pergunta
+    )
+
+    if match_idade:
+
+        return int(
+            match_idade.group(1)
+        )
+
+    # data nascimento
+    match_data = re.search(
+
+        r"(\d{1,2})\s+de\s+\w+\s+de\s+(\d{4})",
+
+        pergunta
+    )
+
+    if match_data:
+
+        ano = int(
+            match_data.group(2)
+        )
+
+        ano_atual = datetime.now().year
+
+        idade = ano_atual - ano
+
+        return idade
+
+    return None
 
 
 def normalizar(texto: str) -> str:

@@ -1,3 +1,4 @@
+#main.py
 import ollama
 
 from prompts import SYSTEM_PROMPT, RETRY_PROMPT
@@ -9,6 +10,7 @@ from utils import (
     resposta_parece_alucinacao,
     historico_sanitizado,
     pergunta_e_saudacao,
+    extrair_idade,
 )
 from tools import (
     consultar_cobertura_cidade,
@@ -173,6 +175,28 @@ def processar_turno(pergunta: str, historico: list[dict]) -> tuple[str, str, boo
             print(f"\n[FILTRO] Fora do tema — bloqueada por Python.")
         # False = não salvar no histórico (pergunta e resposta descartadas)
         return MSG_FORA_TEMA, "[bloqueado por filtro de tema]", False, False
+
+
+    idade_detectada = extrair_idade(pergunta)
+
+    if idade_detectada is not None:
+
+        if "vacina" in pergunta.lower():
+
+            resultado = vacinas_por_idade(
+                str(idade_detectada)
+            )
+
+            resposta = montar_resposta(
+
+                "vacinas_por_idade",
+
+                str(idade_detectada),
+
+                resultado
+            )
+
+            return resposta, "[idade_detectada]", True, False
 
     # ── Passo 2: consulta ao modelo ───────────────────────────────────────────
     historico_limpo = historico_sanitizado(historico)
