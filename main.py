@@ -1,80 +1,53 @@
-import os
-import threading
+# main.py
 
+import os
 from dotenv import load_dotenv
-from flask import Flask
 import telebot
 
-from handlers.menu import registrar_menu
-from handlers.cobertura_handler import registrar_cobertura
-from handlers.vacina_handler import registrar_vacinas
-from handlers.faq_handler import registrar_faq
-from handlers.ia_handler import registrar_ia
+from cobertura.dados import carregar_dados
+from cobertura.handler import registrar_cobertura
+from vacinas.handler import registrar_vacinas
+from handlers.menu import iniciar_menu
+from handlers.ia_handler import processar_mensagem
 
-from cobertura import carregar_dados
 
-# =========================
-# CONFIG
-# =========================
+# ── Config ────────────────────────────────────────────────────────────────────
 
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN_BOT")
-
 bot = telebot.TeleBot(TOKEN)
 
-user_states = {}
+# Estado por usuário (modo atual no fluxo de botões)
+user_states: dict = {}
 
-# =========================
-# FLASK
-# =========================
 
-app = Flask(__name__)
+# ── Dados ─────────────────────────────────────────────────────────────────────
 
-@app.route("/")
-def home():
-    return "Bot Gotinha online ✅"
-
-# =========================
-# CARREGAR DADOS
-# =========================
-
-print("Carregando dados...")
 carregar_dados()
-print("Dados carregados.")
 
-# =========================
-# REGISTRAR HANDLERS
-# =========================
 
-registrar_menu(bot)
+# ── Handlers estruturados (menus/botões) ──────────────────────────────────────
+
 registrar_cobertura(bot, user_states)
 registrar_vacinas(bot, user_states)
-registrar_faq(bot)
-registrar_ia(bot)
 
-# =========================
-# START
-# =========================
 
-if __name__ == "__main__":
+# ── /start e /help ────────────────────────────────────────────────────────────
 
-    bot.remove_webhook()
+@bot.message_handler(commands=["start", "help"])
+def start(msg):
+    iniciar_menu(bot, msg)
 
-    port = int(os.environ.get("PORT", 8080))
 
-    t = threading.Thread(
-        target=lambda: app.run(
-            host="0.0.0.0",
-            port=port,
-            debug=False,
-            use_reloader=False
-        )
-    )
+# ── Texto livre → IA classifica e roteia ──────────────────────────────────────
 
-    t.daemon = True
-    t.start()
+@bot.message_handler(func=lambda m: True)
+def mensagens(msg):
+    processar_mensagem(bot, msg)
 
-    print("🚀 Bot Gotinha iniciado!")
 
-    bot.infinity_polling()
+# ── Run ───────────────────────────────────────────────────────────────────────
+
+print("🤖 Assistente Gotinha online!")
+bot.infinity_polling()

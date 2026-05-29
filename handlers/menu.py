@@ -1,25 +1,26 @@
+# handlers/menu.py
+
 from telebot import types
 
-def registrar_menu(bot):
 
-    @bot.message_handler(
-        commands=["start", "help"]
+def iniciar_menu(bot, msg) -> None:
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        row_width=2,
     )
-    def start(msg):
+    markup.add("Cobertura", "Ranking")
+    markup.add("Vacinas")
 
-        markup = (
-            types.ReplyKeyboardMarkup(
-                resize_keyboard=True
-            )
-        )
-
-        markup.add("Início")
-        markup.add("Vacinas")
-        markup.add("Cobertura Vacinal")
-        markup.add("FAQ")
-
-        bot.send_message(
-            msg.chat.id,
-            "Olá! 👋\n\nSou o Assistente Gotinha 💉",
-            reply_markup=markup
-        )
+    bot.send_message(
+        msg.chat.id,
+        (
+            "Olá! 👋\n\n"
+            "Sou o <b>Assistente Gotinha</b> 💉\n\n"
+            "Posso ajudar com:\n"
+            "• Cobertura vacinal\n"
+            "• Ranking nacional\n"
+            "• Vacinas por idade ou grupo"
+        ),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
