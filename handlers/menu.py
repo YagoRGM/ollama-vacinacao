@@ -13,14 +13,12 @@ def iniciar_menu(bot, msg) -> None:
 
     bot.send_message(
         msg.chat.id,
-        (
-            "Olá! 👋\n\n"
-            "Sou o <b>Assistente Gotinha</b> 💉\n\n"
+            "Olá! 👋 Sou o <b>Assistente Gotinha</b> 💉\n\n"
             "Posso ajudar com:\n"
-            "• Cobertura vacinal\n"
+            "• Cobertura vacinal por estado ou município\n"
             "• Ranking nacional\n"
-            "• Vacinas por idade ou grupo"
-        ),
+            "• Vacinas por idade ou grupo\n"
+            "• Dúvidas sobre vacinação e o SUS",
         reply_markup=markup,
         parse_mode="HTML",
     )
